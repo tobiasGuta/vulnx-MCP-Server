@@ -114,6 +114,8 @@ vulnx-mcp/
 
 ---
 
+<img width="1134" height="356" alt="Screenshot 2026-04-30 182816" src="https://github.com/user-attachments/assets/97a127ff-bb02-41ad-843d-d803759fa614" />
+
 ## Updating vulnx
 
 Simply rebuild the image — the Dockerfile always clones the latest commit:
