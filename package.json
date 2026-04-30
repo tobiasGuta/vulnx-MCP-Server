@@ -1,0 +1,16 @@
+{
+  "name": "vulnx-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server wrapping ProjectDiscovery vulnx — fully containerised",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
