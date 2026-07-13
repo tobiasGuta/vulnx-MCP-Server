@@ -2,6 +2,15 @@
   "name": "vulnx-mcp-server",
   "version": "1.0.0",
   "description": "MCP server wrapping ProjectDiscovery vulnx — fully containerized",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tobiasGuta/vulnx-MCP-Server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tobiasGuta/vulnx-MCP-Server/issues"
+  },
+  "homepage": "https://github.com/tobiasGuta/vulnx-MCP-Server#readme",
   "type": "module",
   "main": "server.js",
   "scripts": {

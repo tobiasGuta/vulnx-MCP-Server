@@ -107,11 +107,20 @@ Set `PDCP_API_KEY` in the environment that launches the MCP client. If no API ke
 
 The container runs as the unprivileged `node` user. The suggested runtime flags also make its filesystem read-only, remove Linux capabilities, prevent privilege escalation, and provide a small temporary filesystem.
 
+## Environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PDCP_API_KEY` | Unset | Optional ProjectDiscovery Cloud Platform API key |
+| `VULNX_MAX_RESPONSE_BYTES` | `524288` | Maximum serialized MCP tool-response size in bytes; accepted range is 4096 through 5242880 |
+
+To customize the response ceiling in Docker, add `-e VULNX_MAX_RESPONSE_BYTES=1048576` to the `docker run` arguments. The 10 MB child-process buffer remains a separate upper bound on how much output the server will collect from vulnx.
+
 ## Tools
 
 | Tool | Description |
 | --- | --- |
-| `vulnx_search` | Free-text and structured CVE search with boolean operators, field filters, a 1–100 result limit, and optional detailed mode |
+| `vulnx_search` | Free-text and structured CVE search with boolean operators, field filters, a 1–100 result limit, compact output by default, and optional detailed modes |
 | `vulnx_cve` | Full details for one validated CVE identifier |
 | `vulnx_filters` | A compact summary, or optional raw output, of searchable fields |
 
@@ -124,7 +133,9 @@ Find CVEs with EPSS above 0.9 that have a Nuclei template.
 What fields can I filter on when searching vulnx?
 ```
 
-Successful JSON responses are returned both as readable text and as MCP `structuredContent`. A shortened CVE response may look like:
+Search JSON is compacted by default: individual strings over 4 KiB, deeply nested values, and nested arrays over 25 items are shortened while the top-level result list is retained. Set `full_details: true` to disable field compaction. This is separate from `detailed: true`, which asks the upstream vulnx CLI for richer records. The serialized response ceiling always applies, including to `full_details` and raw filter output.
+
+Successful JSON responses include MCP `structuredContent`. Compact search responses use a short text summary to avoid sending the same large payload twice. A shortened CVE response may look like:
 
 ```json
 {
@@ -140,7 +151,9 @@ Exact fields depend on the pinned upstream vulnx API response.
 
 - The server invokes `vulnx` with `execFile` and a literal argument array; it never sends model-controlled values through a shell.
 - Runtime schemas reject missing, mistyped, oversized, out-of-range, and unexpected arguments.
-- Each process has a 30-second timeout and a 10 MB output limit, and MCP cancellation is forwarded to the child process.
+- Each process has a 30-second timeout and a 10 MB child-output limit, and MCP cancellation is forwarded to the child process.
+- Serialized MCP responses default to a 512 KiB ceiling. Oversized responses return bounded truncation metadata and a JSON preview instead of flooding the client context.
+- Unexpected exceptions are logged to stderr with diagnostics while the MCP client receives a fixed, non-sensitive error message.
 - Nonzero CLI exits set MCP `isError: true`.
 - The upstream vulnx source revision and npm dependency graph are locked for reproducible builds.
 - The runtime image uses a non-root user and needs no exposed port.
@@ -157,7 +170,7 @@ npm test
 npm start
 ```
 
-Tests cover literal argument handling, runtime validation, CVE validation, limit boundaries, timeouts, malformed and empty output, nonzero exits, structured output, filter truncation, cancellation forwarding, and the MCP initialize/list/call lifecycle.
+Tests cover literal argument handling, runtime validation, CVE validation, response-byte ceilings, compact and full output modes, error redaction, limit boundaries, timeouts, malformed and empty output, nonzero exits, structured output, filter truncation, cancellation forwarding, and the MCP initialize/list/call lifecycle.
 
 ## Updating dependencies
 
@@ -168,13 +181,14 @@ Updates are controlled rather than fetched implicitly:
 3. Replace the default `VULNX_REF` in the Dockerfile only after verification.
 4. Update exact npm versions intentionally and commit the resulting `package-lock.json`.
 
-Automated dependency tooling such as Dependabot or Renovate can propose these changes for review.
+Dependabot checks npm packages, GitHub Actions, and Docker base-image digests weekly. `VULNX_REF` remains a manual update so upstream source changes can be reviewed before the pin moves.
 
 ## Project structure
 
 ```text
 vulnx-MCP-Server/
 ├── .github/workflows/ci.yml
+├── .github/dependabot.yml
 ├── .gitignore
 ├── scripts/docker-smoke.js
 ├── test/server.test.js

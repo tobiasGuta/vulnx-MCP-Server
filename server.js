@@ -17,12 +17,19 @@ import { z } from "zod";
 const PROCESS_TIMEOUT_MS = 30_000;
 const PROCESS_MAX_BUFFER = 10 * 1024 * 1024;
 const MAX_FILTER_FIELDS = 200;
+const DEFAULT_MAX_RESPONSE_BYTES = 512 * 1024;
+const MIN_MAX_RESPONSE_BYTES = 4 * 1024;
+const MAX_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
+const COMPACT_MAX_STRING_BYTES = 4 * 1024;
+const COMPACT_MAX_NESTED_ARRAY_ITEMS = 25;
+const COMPACT_MAX_DEPTH = 8;
 
 const searchArgumentsSchema = z
   .object({
     query: z.string().trim().min(1).max(1_000),
     limit: z.number().int().min(1).max(100).default(10),
     detailed: z.boolean().default(false),
+    full_details: z.boolean().default(false),
     product: z.string().trim().min(1).max(256).optional(),
     vendor: z.string().trim().min(1).max(256).optional(),
   })
@@ -66,6 +73,12 @@ export const TOOLS = [
         detailed: {
           type: "boolean",
           description: "Request detailed information for each vulnerability.",
+          default: false,
+        },
+        full_details: {
+          type: "boolean",
+          description:
+            "Disable compact field truncation. The configured response-size ceiling still applies.",
           default: false,
         },
         product: {
@@ -188,14 +201,172 @@ function parsedOutput(stdout) {
   }
 }
 
-export function toolResult(result) {
+function serializedBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function truncateUtf8(value, maxBytes, suffix = "… [truncated]") {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  if (suffixBytes >= maxBytes) return suffix.slice(0, maxBytes);
+
+  let low = 0;
+  let high = value.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = value.slice(0, middle);
+    if (Buffer.byteLength(candidate, "utf8") + suffixBytes <= maxBytes) low = middle;
+    else high = middle - 1;
+  }
+  return `${value.slice(0, low)}${suffix}`;
+}
+
+export function getMaxResponseBytes(value = process.env.VULNX_MAX_RESPONSE_BYTES) {
+  if (value === undefined || value === "") return DEFAULT_MAX_RESPONSE_BYTES;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return DEFAULT_MAX_RESPONSE_BYTES;
+  if (parsed < MIN_MAX_RESPONSE_BYTES || parsed > MAX_MAX_RESPONSE_BYTES) {
+    return DEFAULT_MAX_RESPONSE_BYTES;
+  }
+  return parsed;
+}
+
+function compactJsonValue(value, state, depth = 0) {
+  if (typeof value === "string") {
+    if (Buffer.byteLength(value, "utf8") <= COMPACT_MAX_STRING_BYTES) return value;
+    state.truncatedValues += 1;
+    return truncateUtf8(value, COMPACT_MAX_STRING_BYTES);
+  }
+  if (!value || typeof value !== "object") return value;
+  if (depth >= COMPACT_MAX_DEPTH) {
+    state.truncatedValues += 1;
+    return "[omitted: maximum nesting depth reached]";
+  }
+  if (Array.isArray(value)) {
+    const limit = depth === 0
+      ? value.length
+      : Math.min(value.length, COMPACT_MAX_NESTED_ARRAY_ITEMS);
+    const compacted = value
+      .slice(0, limit)
+      .map((item) => compactJsonValue(item, state, depth + 1));
+    if (limit < value.length) {
+      state.truncatedValues += 1;
+      compacted.push({
+        _vulnx_mcp_truncated: true,
+        omittedItems: value.length - limit,
+      });
+    }
+    return compacted;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      compactJsonValue(item, state, depth + 1),
+    ]),
+  );
+}
+
+function fitOversizedJsonResponse(response, maxResponseBytes, originalResponseBytes) {
+  const source = JSON.stringify(response.structuredContent ?? {});
+  const message =
+    `The vulnx response exceeded the ${maxResponseBytes}-byte MCP response limit and was truncated. ` +
+    "A bounded JSON preview is available in structuredContent.preview.";
+
+  const build = (preview) => ({
+    content: [{ type: "text", text: message }],
+    structuredContent: {
+      truncated: true,
+      originalResponseBytes,
+      maxResponseBytes,
+      preview,
+    },
+    isError: response.isError === true,
+  });
+
+  let low = 0;
+  let high = source.length;
+  let best = build("");
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = build(source.slice(0, middle));
+    if (serializedBytes(candidate) <= maxResponseBytes) {
+      best = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
+}
+
+export function boundToolResponse(response, maxResponseBytes = getMaxResponseBytes()) {
+  const originalResponseBytes = serializedBytes(response);
+  if (originalResponseBytes <= maxResponseBytes) return response;
+  if (response.structuredContent) {
+    return fitOversizedJsonResponse(response, maxResponseBytes, originalResponseBytes);
+  }
+
+  const originalText = response.content?.[0]?.text ?? "Response truncated.";
+  const suffix = `\n\n[truncated to the ${maxResponseBytes}-byte MCP response limit]`;
+  let low = 0;
+  let high = originalText.length;
+  let best = {
+    ...response,
+    content: [{ type: "text", text: suffix.trim() }],
+  };
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = {
+      ...response,
+      content: [{ type: "text", text: `${originalText.slice(0, middle)}${suffix}` }],
+    };
+    if (serializedBytes(candidate) <= maxResponseBytes) {
+      best = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
+}
+
+function describeJson(data) {
+  if (Array.isArray(data)) return `${data.length} JSON item${data.length === 1 ? "" : "s"}`;
+  if (data && typeof data === "object") {
+    const count = Object.keys(data).length;
+    return `${count} JSON field${count === 1 ? "" : "s"}`;
+  }
+  return "one JSON value";
+}
+
+export function toolResult(result, options = {}) {
+  const {
+    compact = false,
+    maxResponseBytes = getMaxResponseBytes(),
+  } = options;
   const response = {
     content: [{ type: "text", text: formatOutput(result) }],
     isError: result.exitCode !== 0,
   };
   const data = result.exitCode === 0 ? parsedOutput(result.stdout) : undefined;
-  if (data !== undefined) response.structuredContent = { data };
-  return response;
+  if (data !== undefined) {
+    if (compact) {
+      const state = { truncatedValues: 0 };
+      const compacted = compactJsonValue(data, state);
+      response.content[0].text =
+        `Returned ${describeJson(compacted)} in compact mode. ` +
+        "Use full_details=true to request unabridged fields; the response-size limit always applies.";
+      response.structuredContent = {
+        data: compacted,
+        compact: true,
+        truncatedValues: state.truncatedValues,
+      };
+    } else {
+      response.structuredContent = { data };
+    }
+  }
+  return boundToolResponse(response, maxResponseBytes);
 }
 
 /** Return a compact, structured view of filters, or null for invalid JSON. */
@@ -265,35 +436,47 @@ function parseArguments(schema, toolName, args) {
 }
 
 export async function handleToolCall(name, args, options = {}) {
-  const { signal, runner = runVulnx } = options;
+  const {
+    signal,
+    runner = runVulnx,
+    maxResponseBytes = getMaxResponseBytes(),
+  } = options;
 
   switch (name) {
     case "vulnx_search": {
       const parsed = parseArguments(searchArgumentsSchema, name, args);
       if (parsed.error) return parsed.error;
-      const { query, limit, detailed, product, vendor } = parsed.data;
+      const { query, limit, detailed, full_details, product, vendor } = parsed.data;
       const cliArgs = ["search", query, "--limit", String(limit)];
       if (detailed) cliArgs.push("--detailed");
       if (product) cliArgs.push("--product", product);
       if (vendor) cliArgs.push("--vendor", vendor);
-      return toolResult(await runner(cliArgs, { signal }));
+      return toolResult(await runner(cliArgs, { signal }), {
+        compact: !full_details,
+        maxResponseBytes,
+      });
     }
 
     case "vulnx_cve": {
       const parsed = parseArguments(cveArgumentsSchema, name, args);
       if (parsed.error) return parsed.error;
-      return toolResult(await runner(["id", parsed.data.cve_id.toUpperCase()], { signal }));
+      return toolResult(
+        await runner(["id", parsed.data.cve_id.toUpperCase()], { signal }),
+        { maxResponseBytes },
+      );
     }
 
     case "vulnx_filters": {
       const parsed = parseArguments(filtersArgumentsSchema, name, args);
       if (parsed.error) return parsed.error;
       const result = await runner(["filters"], { signal });
-      if (result.exitCode !== 0 || parsed.data.raw) return toolResult(result);
+      if (result.exitCode !== 0 || parsed.data.raw) {
+        return toolResult(result, { maxResponseBytes });
+      }
 
       const data = summarizeFiltersJson(result.stdout);
-      if (!data) return toolResult(result);
-      return {
+      if (!data) return toolResult(result, { maxResponseBytes });
+      return boundToolResponse({
         content: [
           {
             type: "text",
@@ -302,7 +485,7 @@ export async function handleToolCall(name, args, options = {}) {
         ],
         structuredContent: data,
         isError: false,
-      };
+      }, maxResponseBytes);
     }
 
     default:
@@ -313,8 +496,28 @@ export async function handleToolCall(name, args, options = {}) {
   }
 }
 
+export function internalErrorResult(error, logger = (message) => process.stderr.write(message)) {
+  const diagnostics = error instanceof Error
+    ? error.stack || error.message
+    : String(error);
+  logger(`Internal error: ${diagnostics}\n`);
+  return {
+    content: [
+      {
+        type: "text",
+        text: "The vulnx MCP server encountered an internal error.",
+      },
+    ],
+    isError: true,
+  };
+}
+
 export function createServer(options = {}) {
-  const { runner = runVulnx } = options;
+  const {
+    runner = runVulnx,
+    logger,
+    maxResponseBytes = getMaxResponseBytes(),
+  } = options;
   const server = new Server(
     { name: "vulnx-mcp", version: "1.0.0" },
     { capabilities: { tools: {} } },
@@ -326,12 +529,10 @@ export function createServer(options = {}) {
       return await handleToolCall(request.params.name, request.params.arguments, {
         runner,
         signal: extra.signal,
+        maxResponseBytes,
       });
     } catch (error) {
-      return {
-        content: [{ type: "text", text: `Internal error: ${error.message}` }],
-        isError: true,
-      };
+      return internalErrorResult(error, logger);
     }
   });
   return server;

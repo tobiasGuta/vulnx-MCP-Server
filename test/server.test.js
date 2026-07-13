@@ -5,9 +5,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import {
+  boundToolResponse,
   createServer,
   formatOutput,
+  getMaxResponseBytes,
   handleToolCall,
+  internalErrorResult,
   runVulnx,
   summarizeFiltersJson,
   toolResult,
@@ -67,6 +70,72 @@ test("toolResult flags CLI failures and exposes parsed JSON structurally", () =>
   });
 });
 
+test("response-size configuration accepts only safe byte ceilings", () => {
+  assert.equal(getMaxResponseBytes(), 512 * 1024);
+  assert.equal(getMaxResponseBytes("4096"), 4096);
+  assert.equal(getMaxResponseBytes("5242880"), 5 * 1024 * 1024);
+  assert.equal(getMaxResponseBytes("4095"), 512 * 1024);
+  assert.equal(getMaxResponseBytes("not-a-number"), 512 * 1024);
+});
+
+test("oversized structured and text responses obey the serialized-byte ceiling", () => {
+  const structured = toolResult(
+    ok(JSON.stringify({ payload: "x".repeat(50_000) })),
+    { maxResponseBytes: 4096 },
+  );
+  assert.ok(Buffer.byteLength(JSON.stringify(structured), "utf8") <= 4096);
+  assert.equal(structured.structuredContent.truncated, true);
+  assert.equal(structured.structuredContent.maxResponseBytes, 4096);
+
+  const text = boundToolResponse({
+    content: [{ type: "text", text: "y".repeat(50_000) }],
+    isError: true,
+  }, 4096);
+  assert.ok(Buffer.byteLength(JSON.stringify(text), "utf8") <= 4096);
+  assert.match(text.content[0].text, /truncated to the 4096-byte/);
+});
+
+test("search compacts large fields by default and supports explicit full details", async () => {
+  const description = "detail ".repeat(2_000);
+  const runner = async () => ok(JSON.stringify([{ id: "CVE-2025-1234", description }]));
+
+  const compact = await handleToolCall(
+    "vulnx_search",
+    { query: "apache" },
+    { runner, maxResponseBytes: 100_000 },
+  );
+  assert.equal(compact.structuredContent.compact, true);
+  assert.equal(compact.structuredContent.truncatedValues, 1);
+  assert.ok(
+    Buffer.byteLength(compact.structuredContent.data[0].description, "utf8") <= 4096,
+  );
+  assert.match(compact.content[0].text, /compact mode/);
+
+  const full = await handleToolCall(
+    "vulnx_search",
+    { query: "apache", full_details: true },
+    { runner, maxResponseBytes: 100_000 },
+  );
+  assert.equal(full.structuredContent.data[0].description, description);
+  assert.equal(full.structuredContent.compact, undefined);
+});
+
+test("unexpected internal errors are logged but not exposed to MCP clients", () => {
+  const logged = [];
+  const secret = "C:\\private\\workspace\\dependency.js";
+  const response = internalErrorResult(
+    new Error(`failure in ${secret}`),
+    (message) => logged.push(message),
+  );
+  assert.equal(
+    response.content[0].text,
+    "The vulnx MCP server encountered an internal error.",
+  );
+  assert.equal(response.isError, true);
+  assert.doesNotMatch(JSON.stringify(response), /private|dependency\.js/);
+  assert.match(logged.join(""), /private\\workspace\\dependency\.js/);
+});
+
 test("search validates types and boundaries before invoking vulnx", async () => {
   let calls = 0;
   const runner = async () => {
@@ -81,6 +150,7 @@ test("search validates types and boundaries before invoking vulnx", async () => 
     { query: "apache", limit: 101 },
     { query: "apache", limit: 1.5 },
     { query: "apache", detailed: "yes" },
+    { query: "apache", full_details: "yes" },
     { query: "apache", product: "x".repeat(257) },
     { query: "apache", unexpected: true },
   ]) {
@@ -205,4 +275,33 @@ test("MCP initialize, tools/list, and tools/call work end to end", async (t) => 
   assert.deepEqual(called.structuredContent, {
     data: { argv: ["id", "CVE-2021-44228"] },
   });
+});
+
+test("MCP request handler redacts a runner exception end to end", async (t) => {
+  const logged = [];
+  const runner = async () => {
+    throw new Error("failure at C:\\private\\runner.js");
+  };
+  const server = createServer({ runner, logger: (message) => logged.push(message) });
+  const client = new Client({ name: "vulnx-error-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  t.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const called = await client.callTool({
+    name: "vulnx_filters",
+    arguments: {},
+  });
+  assert.equal(called.isError, true);
+  assert.equal(
+    called.content[0].text,
+    "The vulnx MCP server encountered an internal error.",
+  );
+  assert.doesNotMatch(JSON.stringify(called), /private|runner\.js/);
+  assert.match(logged.join(""), /private\\runner\.js/);
 });
