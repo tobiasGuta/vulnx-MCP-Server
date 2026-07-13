@@ -325,7 +325,7 @@ Use the vulnx_status tool. Show the server version, vulnx availability, cache co
 
 **Screenshot 1:** Server health result
 
-<!-- Add screenshot here: docs/screenshots/01-server-health.png -->
+<img width="1906" height="420" alt="image" src="https://github.com/user-attachments/assets/2ef65e5c-318d-41de-a3cc-50221cebb148" />
 
 <br><br><br><br>
 
@@ -337,7 +337,7 @@ Use vulnx_filters to list the vulnerability search filters supported by the inst
 
 **Screenshot 2:** Available filters result
 
-<!-- Add screenshot here: docs/screenshots/02-available-filters.png -->
+<img width="1894" height="800" alt="image" src="https://github.com/user-attachments/assets/acb3a6f9-7618-43fe-81be-0b6a954aba69" />
 
 <br><br><br><br>
 
@@ -349,7 +349,7 @@ Use vulnx_search to search for vulnerabilities related to remote code execution 
 
 **Screenshot 3:** General search result
 
-<!-- Add screenshot here: docs/screenshots/03-general-search.png -->
+<img width="1906" height="495" alt="image" src="https://github.com/user-attachments/assets/fae47ce8-da86-4a54-9e71-501fae715152" />
 
 <br><br><br><br>
 
@@ -361,7 +361,7 @@ Use vulnx_search with detailed=true and full_details=false to find authenticatio
 
 **Screenshot 4:** Detailed search result
 
-<!-- Add screenshot here: docs/screenshots/04-detailed-search.png -->
+<img width="1907" height="449" alt="image" src="https://github.com/user-attachments/assets/1eea871d-02d5-4a45-bc03-e573e5341414" />
 
 <br><br><br><br>
 
@@ -373,7 +373,7 @@ Use vulnx_cve to retrieve intelligence for CVE-2023-44487. Summarize CVSS, EPSS,
 
 **Screenshot 5:** Single CVE lookup result
 
-<!-- Add screenshot here: docs/screenshots/05-single-cve.png -->
+<img width="1893" height="744" alt="image" src="https://github.com/user-attachments/assets/f30d5297-90c3-474e-b714-3486f323ee58" />
 
 <br><br><br><br>
 
@@ -392,7 +392,7 @@ Continue when an individual lookup fails. Confirm that identifiers were normaliz
 
 **Screenshot 6:** Batch CVE lookup result
 
-<!-- Add screenshot here: docs/screenshots/06-batch-cve.png -->
+<img width="1895" height="630" alt="image" src="https://github.com/user-attachments/assets/d6cd84a3-80fa-49a5-9fd1-39d0f015003b" />
 
 <br><br><br><br>
 
@@ -410,7 +410,7 @@ Show the score, priority, reasons, missing signals, ranking method, and disclaim
 
 **Screenshot 7:** Live prioritization result
 
-<!-- Add screenshot here: docs/screenshots/07-live-prioritization.png -->
+<img width="1901" height="763" alt="image" src="https://github.com/user-attachments/assets/91da97ca-0deb-4ff0-9412-4b40a446143f" />
 
 <br><br><br><br>
 
@@ -444,7 +444,7 @@ Explain why one ranks above the other.
 
 **Screenshot 8:** Supplied-data prioritization result
 
-<!-- Add screenshot here: docs/screenshots/08-supplied-prioritization.png -->
+<img width="1898" height="966" alt="image" src="https://github.com/user-attachments/assets/e9ee3446-cb78-46d2-b73c-b860101166a5" />
 
 <br><br><br><br>
 
@@ -456,22 +456,9 @@ Use vulnx_product_exposure with vendor "openssl", product "openssl", version "3.
 
 **Screenshot 9:** Product exposure result
 
-<!-- Add screenshot here: docs/screenshots/09-product-exposure.png -->
+<img width="1893" height="514" alt="image" src="https://github.com/user-attachments/assets/7aa4641a-8556-4a69-b9fa-5b8ac611bd8d" />
 
 <br><br><br><br>
-
-### 10. CVE comparison
-
-```text
-Use vulnx_compare to compare CVE-2023-44487, CVE-2024-3094, and CVE-2017-0144. Show the normalized comparison, highest CVSS, highest EPSS, KEV-listed entries, and highest-priority CVE.
-```
-
-**Screenshot 10:** CVE comparison result
-
-<!-- Add screenshot here: docs/screenshots/10-cve-comparison.png -->
-
-<br><br><br><br>
-
 ### 11. Finding enrichment
 
 ```text
@@ -506,7 +493,7 @@ Confirm that no host, port, title, or metadata was sent to vulnx.
 
 **Screenshot 11:** Finding enrichment result
 
-<!-- Add screenshot here: docs/screenshots/11-finding-enrichment.png -->
+<img width="1902" height="927" alt="image" src="https://github.com/user-attachments/assets/1c1497b6-321a-4681-babe-0a2f8bacd018" />
 
 <br><br><br><br>
 
@@ -522,7 +509,7 @@ The first response should normally report `cache.hit: false`; the second should 
 
 **Screenshot 12:** First and second cache results
 
-<!-- Add screenshot here: docs/screenshots/12-cache-test.png -->
+<img width="1904" height="571" alt="image" src="https://github.com/user-attachments/assets/6eaf57ff-5c15-4e7c-8c20-ae053bdf9ed1" />
 
 <br><br><br><br>
 
