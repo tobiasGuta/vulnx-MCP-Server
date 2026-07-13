@@ -1,9 +1,10 @@
 /**
- * vulnx MCP Server
- * ─────────────────
- * Wraps the ProjectDiscovery `vulnx` CLI as a set of MCP tools so Claude
- *   - vulnx_filters  : list all searchable fields / operators
+ * MCP server exposing the ProjectDiscovery vulnx CLI over stdio.
  */
+
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -11,120 +12,49 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { execSync } from "child_process";
+import { z } from "zod";
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+const PROCESS_TIMEOUT_MS = 30_000;
+const PROCESS_MAX_BUFFER = 10 * 1024 * 1024;
+const MAX_FILTER_FIELDS = 200;
 
-/**
- * Run vulnx with the supplied arguments.
- * Always passes --json so we get machine-readable output.
- * Returns { stdout, stderr, exitCode }.
- */
-function runVulnx(args = []) {
-  const apiKey = process.env.PDCP_API_KEY || "";
-  const env = { ...process.env };
-  if (apiKey) env.PDCP_API_KEY = apiKey;
+const searchArgumentsSchema = z
+  .object({
+    query: z.string().trim().min(1).max(1_000),
+    limit: z.number().int().min(1).max(100).default(10),
+    detailed: z.boolean().default(false),
+    product: z.string().trim().min(1).max(256).optional(),
+    vendor: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
 
-  // Build command string (all args are already validated / escaped by callers)
-  const cmd = ["vulnx", ...args, "--json"].join(" ");
+const cveArgumentsSchema = z
+  .object({
+    cve_id: z.string().trim().max(32).regex(/^CVE-\d{4}-\d{4,}$/i),
+  })
+  .strict();
 
-  try {
-    const stdout = execSync(cmd, {
-      env,
-      timeout: 30_000,
-      maxBuffer: 10 * 1024 * 1024, // 10 MB
-    }).toString();
-    return { stdout, stderr: "", exitCode: 0 };
-  } catch (err) {
-    return {
-      stdout: err.stdout?.toString() ?? "",
-      stderr: err.stderr?.toString() ?? err.message,
-      exitCode: err.status ?? 1,
-    };
-  }
-}
+const filtersArgumentsSchema = z
+  .object({
+    raw: z.boolean().default(false),
+  })
+  .strict();
 
-/**
- * Format the raw vulnx output into a clean text block for Claude.
- * If the output is valid JSON we pretty-print it; otherwise return as-is.
- */
-function formatOutput({ stdout, stderr, exitCode }) {
-  if (exitCode !== 0) {
-    return `❌ vulnx exited with code ${exitCode}:\n${stderr || stdout}`;
-  }
-  if (!stdout.trim()) return "No results returned.";
-
-  try {
-    const parsed = JSON.parse(stdout);
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return stdout;
-  }
-}
-
-/**
- * Summarise a potentially large filters JSON into a compact list of field
- * summaries so the MCP doesn't return huge payloads that the host will
- * need to write to temp files. Returns a string or null on failure.
- */
-function summarizeFiltersJson(stdout) {
-  try {
-    const parsed = JSON.parse(stdout);
-    const summary = [];
-
-    // If the CLI returns an object with a `fields` mapping, prefer that.
-    if (parsed && typeof parsed === "object") {
-      if (parsed.fields && typeof parsed.fields === "object") {
-        for (const [name, info] of Object.entries(parsed.fields)) {
-          const type = (info && info.type) || (info && info.example ? typeof info.example : typeof info);
-          const example = info && (info.example ?? info.sample ?? info.example_value ?? null);
-          summary.push({ name, type, example });
-        }
-        return JSON.stringify({ summary, truncated: false }, null, 2);
-      }
-
-      // If it's an array of field descriptors, map first N entries.
-      if (Array.isArray(parsed)) {
-        for (const item of parsed.slice(0, 200)) {
-          if (item && item.name) {
-            summary.push({ name: item.name, type: item.type || typeof item.example, example: item.example ?? null });
-          }
-        }
-        return JSON.stringify({ summary, truncated: parsed.length > 200 }, null, 2);
-      }
-
-      // Generic fallback: list top-level keys with sample types/values.
-      for (const [k, v] of Object.entries(parsed)) {
-        if (k === "count") continue;
-        const type = Array.isArray(v) ? "array" : typeof v;
-        let example;
-        if (Array.isArray(v)) example = v.length ? v[0] : null;
-        else if (v && typeof v === "object") example = Object.fromEntries(Object.entries(v).slice(0, 2));
-        else example = v;
-        summary.push({ name: k, type, example });
-      }
-      return JSON.stringify({ summary, truncated: false }, null, 2);
-    }
-    return null;
-  } catch (err) {
-    return null;
-  }
-}
-
-// ─── tool definitions ─────────────────────────────────────────────────────────
-
-const TOOLS = [
+export const TOOLS = [
   {
     name: "vulnx_search",
     description:
-      "Search the ProjectDiscovery vulnerability database. Supports free-text queries, boolean operators (&&, ||, NOT), and field-specific filters such as severity:critical, cvss_score:>8.0, is_kev:true, cve_created_at:>=2024, affected_products.vendor:microsoft, etc. Returns a JSON list of matching vulnerabilities.",
+      "Search the ProjectDiscovery vulnerability database. Supports free-text queries, boolean operators (&&, ||, NOT), and field-specific filters such as severity:critical, cvss_score:>8.0, is_kev:true, cve_created_at:>=2024, and affected_products.vendor:microsoft.",
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
         query: {
           type: "string",
+          minLength: 1,
+          maxLength: 1000,
           description:
-            'Search query. Examples: "apache", "severity:critical && is_remote:true", "log4j || log4shell", "cvss_score:>9.0 && cve_created_at:>=2024"',
+            'Search query. Examples: "apache", "severity:critical && is_remote:true", or "cvss_score:>9.0 && cve_created_at:>=2024".',
         },
         limit: {
           type: "integer",
@@ -135,16 +65,20 @@ const TOOLS = [
         },
         detailed: {
           type: "boolean",
-          description: "Request detailed information for each vulnerability (slower but richer).",
+          description: "Request detailed information for each vulnerability.",
           default: false,
         },
         product: {
           type: "string",
-          description: "Comma-separated list of product names to filter by (e.g. 'apache,nginx').",
+          minLength: 1,
+          maxLength: 256,
+          description: "Comma-separated product names, for example apache,nginx.",
         },
         vendor: {
           type: "string",
-          description: "Comma-separated list of vendor names to filter by (e.g. 'microsoft,oracle').",
+          minLength: 1,
+          maxLength: 256,
+          description: "Comma-separated vendor names, for example microsoft,oracle.",
         },
       },
       required: ["query"],
@@ -153,14 +87,16 @@ const TOOLS = [
   {
     name: "vulnx_cve",
     description:
-      "Fetch full details for a specific CVE identifier (e.g. CVE-2021-44228 / Log4Shell). Returns CVSS scores, EPSS, affected products, PoC availability, KEV status, Nuclei template availability, and more.",
+      "Fetch full details for a CVE identifier, including scores, affected products, PoC availability, KEV status, and Nuclei template availability.",
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
         cve_id: {
           type: "string",
-          description: "CVE identifier, e.g. CVE-2021-44228",
-          pattern: "^CVE-\\d{4}-\\d+$",
+          maxLength: 32,
+          description: "CVE identifier, for example CVE-2021-44228.",
+          pattern: "^CVE-\\d{4}-\\d{4,}$",
         },
       },
       required: ["cve_id"],
@@ -169,13 +105,14 @@ const TOOLS = [
   {
     name: "vulnx_filters",
     description:
-      "List all available search fields, their data types, descriptions, and example values. Use this to discover what you can filter on before building complex queries.",
+      "List available search fields, data types, descriptions, and example values.",
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
         raw: {
           type: "boolean",
-          description: "If true, return the full raw filters JSON (may be large).",
+          description: "Return the full filters JSON instead of a compact summary.",
           default: false,
         },
       },
@@ -183,109 +120,232 @@ const TOOLS = [
   },
 ];
 
-// ─── server setup ─────────────────────────────────────────────────────────────
+function exitCodeForError(error) {
+  if (typeof error?.code === "number") return error.code;
+  if (error?.code === "ABORT_ERR") return 130;
+  if (error?.killed || error?.signal === "SIGTERM") return 124;
+  return 1;
+}
 
-const server = new Server(
-  { name: "vulnx-mcp", version: "1.0.0" },
-  { capabilities: { tools: {} } }
-);
+/**
+ * Run vulnx without a shell. Every caller-supplied value remains one literal
+ * argv entry, so shell metacharacters cannot become commands.
+ */
+export function runVulnx(args = [], options = {}) {
+  const {
+    signal,
+    execFileImpl = execFile,
+    timeout = PROCESS_TIMEOUT_MS,
+    maxBuffer = PROCESS_MAX_BUFFER,
+  } = options;
 
-// List tools
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  return new Promise((resolve) => {
+    const finish = (error, stdout = "", stderr = "") => {
+      resolve({
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr || error?.message || ""),
+        exitCode: error ? exitCodeForError(error) : 0,
+      });
+    };
 
-// Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+    try {
+      execFileImpl(
+        "vulnx",
+        [...args, "--json"],
+        {
+          env: { ...process.env },
+          encoding: "utf8",
+          timeout,
+          maxBuffer,
+          signal,
+        },
+        finish,
+      );
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+export function formatOutput({ stdout, stderr, exitCode }) {
+  if (exitCode !== 0) {
+    return `vulnx exited with code ${exitCode}:\n${stderr || stdout || "Unknown error"}`;
+  }
+  if (!stdout.trim()) return "No results returned.";
 
   try {
-    switch (name) {
-      // ── vulnx_search ──────────────────────────────────────────────────────
-      case "vulnx_search": {
-        const { query, limit = 10, detailed = false, product, vendor } = args;
-
-        const cliArgs = ["search", query, "--limit", String(limit)];
-        if (detailed) cliArgs.push("--detailed");
-        if (product) cliArgs.push("--product", product);
-        if (vendor) cliArgs.push("--vendor", vendor);
-
-        const result = runVulnx(cliArgs);
-        return {
-          content: [{ type: "text", text: formatOutput(result) }],
-        };
-      }
-
-      // ── vulnx_cve ─────────────────────────────────────────────────────────
-      case "vulnx_cve": {
-        const { cve_id } = args;
-
-        // Basic CVE-ID sanitisation — only alphanumerics and hyphens allowed
-        if (!/^CVE-\d{4}-\d+$/i.test(cve_id)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `❌ Invalid CVE ID format: "${cve_id}". Expected format: CVE-YYYY-NNNNN`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const result = runVulnx(["id", cve_id.toUpperCase()]);
-        return {
-          content: [{ type: "text", text: formatOutput(result) }],
-        };
-      }
-
-      // ── vulnx_filters ─────────────────────────────────────────────────────
-      case "vulnx_filters": {
-        const { raw = false } = args || {};
-        const result = runVulnx(["filters"]);
-
-        // If the CLI errored, return the full error blob so callers can debug.
-        if (result.exitCode !== 0) {
-          return { content: [{ type: "text", text: formatOutput(result) }] };
-        }
-
-        // If the caller explicitly wants raw output, return as-is (may be large).
-        if (raw) {
-          return { content: [{ type: "text", text: formatOutput(result) }] };
-        }
-
-        // Otherwise try to summarise the JSON into a compact field list.
-        const summary = summarizeFiltersJson(result.stdout);
-        if (summary) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Filter fields summary (truncated):\n${summary}\n\nCall with { raw: true } to retrieve full JSON if needed.`,
-              },
-            ],
-          };
-        }
-
-        // Fallback to the full formatted output if summarisation failed.
-        return { content: [{ type: "text", text: formatOutput(result) }] };
-      }
-
-      default:
-        return {
-          content: [{ type: "text", text: `Unknown tool: ${name}` }],
-          isError: true,
-        };
-    }
-  } catch (err) {
-    return {
-      content: [{ type: "text", text: `Internal error: ${err.message}` }],
-      isError: true,
-    };
+    return JSON.stringify(JSON.parse(stdout), null, 2);
+  } catch {
+    return stdout;
   }
-});
+}
 
-// ─── start ────────────────────────────────────────────────────────────────────
+function parsedOutput(stdout) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+}
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
-// MCP servers must not write anything to stdout except protocol messages
-process.stderr.write("vulnx MCP server started (stdio transport)\n");
+export function toolResult(result) {
+  const response = {
+    content: [{ type: "text", text: formatOutput(result) }],
+    isError: result.exitCode !== 0,
+  };
+  const data = result.exitCode === 0 ? parsedOutput(result.stdout) : undefined;
+  if (data !== undefined) response.structuredContent = { data };
+  return response;
+}
+
+/** Return a compact, structured view of filters, or null for invalid JSON. */
+export function summarizeFiltersJson(stdout) {
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const summary = [];
+  if (Array.isArray(parsed)) {
+    for (const item of parsed.slice(0, MAX_FILTER_FIELDS)) {
+      if (item && typeof item === "object" && item.name) {
+        summary.push({
+          name: item.name,
+          type: item.type || typeof item.example,
+          example: item.example ?? null,
+        });
+      }
+    }
+    return { summary, truncated: parsed.length > MAX_FILTER_FIELDS };
+  }
+
+  if (parsed.fields && typeof parsed.fields === "object") {
+    const entries = Object.entries(parsed.fields);
+    for (const [name, info] of entries.slice(0, MAX_FILTER_FIELDS)) {
+      summary.push({
+        name,
+        type: info?.type || (info?.example !== undefined ? typeof info.example : typeof info),
+        example: info?.example ?? info?.sample ?? info?.example_value ?? null,
+      });
+    }
+    return { summary, truncated: entries.length > MAX_FILTER_FIELDS };
+  }
+
+  const entries = Object.entries(parsed).filter(([key]) => key !== "count");
+  for (const [name, value] of entries.slice(0, MAX_FILTER_FIELDS)) {
+    const type = Array.isArray(value) ? "array" : typeof value;
+    let example = value;
+    if (Array.isArray(value)) example = value[0] ?? null;
+    else if (value && typeof value === "object") {
+      example = Object.fromEntries(Object.entries(value).slice(0, 2));
+    }
+    summary.push({ name, type, example });
+  }
+  return { summary, truncated: entries.length > MAX_FILTER_FIELDS };
+}
+
+function invalidArgumentsResult(toolName, error) {
+  const details = error.issues
+    .map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`)
+    .join("; ");
+  return {
+    content: [{ type: "text", text: `Invalid arguments for ${toolName}: ${details}` }],
+    isError: true,
+  };
+}
+
+function parseArguments(schema, toolName, args) {
+  const parsed = schema.safeParse(args ?? {});
+  if (!parsed.success) return { error: invalidArgumentsResult(toolName, parsed.error) };
+  return { data: parsed.data };
+}
+
+export async function handleToolCall(name, args, options = {}) {
+  const { signal, runner = runVulnx } = options;
+
+  switch (name) {
+    case "vulnx_search": {
+      const parsed = parseArguments(searchArgumentsSchema, name, args);
+      if (parsed.error) return parsed.error;
+      const { query, limit, detailed, product, vendor } = parsed.data;
+      const cliArgs = ["search", query, "--limit", String(limit)];
+      if (detailed) cliArgs.push("--detailed");
+      if (product) cliArgs.push("--product", product);
+      if (vendor) cliArgs.push("--vendor", vendor);
+      return toolResult(await runner(cliArgs, { signal }));
+    }
+
+    case "vulnx_cve": {
+      const parsed = parseArguments(cveArgumentsSchema, name, args);
+      if (parsed.error) return parsed.error;
+      return toolResult(await runner(["id", parsed.data.cve_id.toUpperCase()], { signal }));
+    }
+
+    case "vulnx_filters": {
+      const parsed = parseArguments(filtersArgumentsSchema, name, args);
+      if (parsed.error) return parsed.error;
+      const result = await runner(["filters"], { signal });
+      if (result.exitCode !== 0 || parsed.data.raw) return toolResult(result);
+
+      const data = summarizeFiltersJson(result.stdout);
+      if (!data) return toolResult(result);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Filter fields summary${data.truncated ? " (truncated)" : ""}:\n${JSON.stringify(data, null, 2)}\n\nCall with {"raw":true} to retrieve the full JSON.`,
+          },
+        ],
+        structuredContent: data,
+        isError: false,
+      };
+    }
+
+    default:
+      return {
+        content: [{ type: "text", text: `Unknown tool: ${name}` }],
+        isError: true,
+      };
+  }
+}
+
+export function createServer(options = {}) {
+  const { runner = runVulnx } = options;
+  const server = new Server(
+    { name: "vulnx-mcp", version: "1.0.0" },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    try {
+      return await handleToolCall(request.params.name, request.params.arguments, {
+        runner,
+        signal: extra.signal,
+      });
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: `Internal error: ${error.message}` }],
+        isError: true,
+      };
+    }
+  });
+  return server;
+}
+
+export async function startServer() {
+  const server = createServer();
+  await server.connect(new StdioServerTransport());
+  // Stdout is reserved exclusively for MCP protocol messages.
+  process.stderr.write("vulnx MCP server started (stdio transport)\n");
+}
+
+const isMainModule =
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isMainModule) await startServer();

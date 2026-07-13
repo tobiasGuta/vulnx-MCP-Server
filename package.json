@@ -1,14 +1,17 @@
 {
   "name": "vulnx-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server wrapping ProjectDiscovery vulnx — fully containerised",
+  "description": "MCP server wrapping ProjectDiscovery vulnx — fully containerized",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "smoke:docker": "node scripts/docker-smoke.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.2"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.4.3"
   },
   "engines": {
     "node": ">=20"

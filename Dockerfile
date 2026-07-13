@@ -1,32 +1,29 @@
-# Stage 1: Build vulnx binary from source
-FROM golang:1.24-alpine AS builder
+# Stage 1: build the vulnx binary from an immutable upstream revision.
+FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS builder
+
+ARG VULNX_REF=2bea077946026d06814ad5c0f82f6e4291dda93f
 
 RUN apk add --no-cache git ca-certificates
+RUN git clone https://github.com/projectdiscovery/vulnx.git /src/vulnx \
+    && cd /src/vulnx \
+    && git checkout --detach "$VULNX_REF"
 
-RUN git clone https://github.com/projectdiscovery/vulnx.git /src/vulnx
 WORKDIR /src/vulnx
+RUN go build -trimpath -ldflags="-s -w" -o /usr/local/bin/vulnx ./cmd/vulnx
 
-RUN go build -o /usr/local/bin/vulnx ./cmd/vulnx
+# Stage 2: run only Node.js, certificates, the server, and the vulnx binary.
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
 
-# ─────────────────────────────────────────────
-# Stage 2: MCP server runtime (Node.js)
-# ─────────────────────────────────────────────
-FROM node:20-alpine
-
-# System certs needed for HTTPS calls from vulnx
 RUN apk add --no-cache ca-certificates
-
-# Copy the compiled vulnx binary
 COPY --from=builder /usr/local/bin/vulnx /usr/local/bin/vulnx
 
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev \
+    && npm cache clean --force
 
-# Install Node dependencies
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
+COPY --chown=node:node server.js ./
 
-# Copy MCP server source
-COPY server.js ./
-
-# MCP servers communicate over stdio — no exposed port needed
+# MCP servers communicate over stdio; no network port is exposed.
+USER node
 CMD ["node", "server.js"]
