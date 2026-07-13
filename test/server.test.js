@@ -86,6 +86,9 @@ test("oversized structured and text responses obey the serialized-byte ceiling",
   assert.ok(Buffer.byteLength(JSON.stringify(structured), "utf8") <= 4096);
   assert.equal(structured.structuredContent.truncated, true);
   assert.equal(structured.structuredContent.maxResponseBytes, 4096);
+  assert.equal(structured.structuredContent.previewFormat, "partial-json-text");
+  assert.equal(typeof structured.structuredContent.previewText, "string");
+  assert.equal(structured.structuredContent.preview, undefined);
 
   const text = boundToolResponse({
     content: [{ type: "text", text: "y".repeat(50_000) }],

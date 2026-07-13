@@ -271,15 +271,16 @@ function fitOversizedJsonResponse(response, maxResponseBytes, originalResponseBy
   const source = JSON.stringify(response.structuredContent ?? {});
   const message =
     `The vulnx response exceeded the ${maxResponseBytes}-byte MCP response limit and was truncated. ` +
-    "A bounded JSON preview is available in structuredContent.preview.";
+    "A bounded partial-JSON text preview is available in structuredContent.previewText.";
 
-  const build = (preview) => ({
+  const build = (previewText) => ({
     content: [{ type: "text", text: message }],
     structuredContent: {
       truncated: true,
       originalResponseBytes,
       maxResponseBytes,
-      preview,
+      previewFormat: "partial-json-text",
+      previewText,
     },
     isError: response.isError === true,
   });

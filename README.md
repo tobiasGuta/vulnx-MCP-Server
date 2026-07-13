@@ -152,7 +152,7 @@ Exact fields depend on the pinned upstream vulnx API response.
 - The server invokes `vulnx` with `execFile` and a literal argument array; it never sends model-controlled values through a shell.
 - Runtime schemas reject missing, mistyped, oversized, out-of-range, and unexpected arguments.
 - Each process has a 30-second timeout and a 10 MB child-output limit, and MCP cancellation is forwarded to the child process.
-- Serialized MCP responses default to a 512 KiB ceiling. Oversized responses return bounded truncation metadata and a JSON preview instead of flooding the client context.
+- Serialized MCP responses default to a 512 KiB ceiling. Oversized responses return bounded truncation metadata and a `previewText` field explicitly labeled as `partial-json-text`, rather than implying the truncated preview is parseable JSON.
 - Unexpected exceptions are logged to stderr with diagnostics while the MCP client receives a fixed, non-sensitive error message.
 - Nonzero CLI exits set MCP `isError: true`.
 - The upstream vulnx source revision and npm dependency graph are locked for reproducible builds.
