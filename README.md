@@ -313,6 +313,219 @@ npm run smoke:docker
 
 The smoke client performs the MCP initialize exchange, verifies all nine tools, calls `vulnx_status`, and performs a safe filter operation through the hardened container.
 
+## Manual test prompts and screenshots
+
+After adding this MCP server to your client, restart the client and run the prompts below. Each prompt has a reserved screenshot area. Replace the placeholder text with Markdown such as `![Server health result](docs/screenshots/01-server-health.png)` when the screenshot is ready.
+
+### 1. Server health
+
+```text
+Use the vulnx_status tool. Show the server version, vulnx availability, cache configuration, response-size limit, and pinned vulnx revision. Do not display secrets.
+```
+
+**Screenshot 1:** Server health result
+
+<!-- Add screenshot here: docs/screenshots/01-server-health.png -->
+
+<br><br><br><br>
+
+### 2. Available filters
+
+```text
+Use vulnx_filters to list the vulnerability search filters supported by the installed vulnx CLI. Return a compact summary.
+```
+
+**Screenshot 2:** Available filters result
+
+<!-- Add screenshot here: docs/screenshots/02-available-filters.png -->
+
+<br><br><br><br>
+
+### 3. General search
+
+```text
+Use vulnx_search to search for vulnerabilities related to remote code execution in web servers. Limit the result to 5 records and summarize the most important findings.
+```
+
+**Screenshot 3:** General search result
+
+<!-- Add screenshot here: docs/screenshots/03-general-search.png -->
+
+<br><br><br><br>
+
+### 4. Detailed search
+
+```text
+Use vulnx_search with detailed=true and full_details=false to find authentication bypass vulnerabilities. Limit the response to 5 results. Explain which fields were compacted, if any.
+```
+
+**Screenshot 4:** Detailed search result
+
+<!-- Add screenshot here: docs/screenshots/04-detailed-search.png -->
+
+<br><br><br><br>
+
+### 5. Single CVE lookup
+
+```text
+Use vulnx_cve to retrieve intelligence for CVE-2023-44487. Summarize CVSS, EPSS, KEV status, exploitability, affected products, and available proof-of-concept information.
+```
+
+**Screenshot 5:** Single CVE lookup result
+
+<!-- Add screenshot here: docs/screenshots/05-single-cve.png -->
+
+<br><br><br><br>
+
+### 6. Batch CVE lookup
+
+```text
+Use vulnx_batch_cve for these identifiers:
+
+- cve-2023-44487
+- CVE-2024-3094
+- CVE-2017-0144
+- CVE-2023-44487
+
+Continue when an individual lookup fails. Confirm that identifiers were normalized, duplicates were removed, and report successful and failed counts.
+```
+
+**Screenshot 6:** Batch CVE lookup result
+
+<!-- Add screenshot here: docs/screenshots/06-batch-cve.png -->
+
+<br><br><br><br>
+
+### 7. Prioritization using live lookups
+
+```text
+Use vulnx_prioritize to rank these vulnerabilities:
+
+- CVE-2023-44487
+- CVE-2024-3094
+- CVE-2017-0144
+
+Show the score, priority, reasons, missing signals, ranking method, and disclaimer for each result.
+```
+
+**Screenshot 7:** Live prioritization result
+
+<!-- Add screenshot here: docs/screenshots/07-live-prioritization.png -->
+
+<br><br><br><br>
+
+### 8. Prioritization using supplied data
+
+```text
+Use vulnx_prioritize with these supplied vulnerability signals:
+
+[
+  {
+    "cve_id": "CVE-2025-1001",
+    "cvss_score": 9.8,
+    "epss_score": 0.92,
+    "is_kev": true,
+    "is_remote": true,
+    "has_poc": true,
+    "has_nuclei_template": false
+  },
+  {
+    "cve_id": "CVE-2025-1002",
+    "cvss_score": 7.5,
+    "epss_score": 0.15,
+    "is_kev": false,
+    "is_remote": true,
+    "has_poc": false
+  }
+]
+
+Explain why one ranks above the other.
+```
+
+**Screenshot 8:** Supplied-data prioritization result
+
+<!-- Add screenshot here: docs/screenshots/08-supplied-prioritization.png -->
+
+<br><br><br><br>
+
+### 9. Product exposure research
+
+```text
+Use vulnx_product_exposure with vendor "openssl", product "openssl", version "3.0.7", limit 10, and detailed=true. Clearly state the match confidence and why the result does not prove that an installed target is vulnerable.
+```
+
+**Screenshot 9:** Product exposure result
+
+<!-- Add screenshot here: docs/screenshots/09-product-exposure.png -->
+
+<br><br><br><br>
+
+### 10. CVE comparison
+
+```text
+Use vulnx_compare to compare CVE-2023-44487, CVE-2024-3094, and CVE-2017-0144. Show the normalized comparison, highest CVSS, highest EPSS, KEV-listed entries, and highest-priority CVE.
+```
+
+**Screenshot 10:** CVE comparison result
+
+<!-- Add screenshot here: docs/screenshots/10-cve-comparison.png -->
+
+<br><br><br><br>
+
+### 11. Finding enrichment
+
+```text
+Use vulnx_enrich_findings to enrich these submitted findings. Include priority scoring and preserve their original order and metadata:
+
+[
+  {
+    "host": "app.internal.test",
+    "port": 443,
+    "protocol": "https",
+    "source": "security-scanner",
+    "cve_id": "CVE-2023-44487",
+    "title": "Possible HTTP/2 resource exhaustion",
+    "metadata": {
+      "environment": "staging"
+    }
+  },
+  {
+    "host": "database.internal.test",
+    "port": 5432,
+    "protocol": "tcp",
+    "source": "inventory",
+    "title": "Finding without a CVE",
+    "metadata": {
+      "owner": "platform-team"
+    }
+  }
+]
+
+Confirm that no host, port, title, or metadata was sent to vulnx.
+```
+
+**Screenshot 11:** Finding enrichment result
+
+<!-- Add screenshot here: docs/screenshots/11-finding-enrichment.png -->
+
+<br><br><br><br>
+
+### 12. Cache test
+
+Run this exact prompt twice:
+
+```text
+Use vulnx_cve to retrieve CVE-2023-44487. Include the cache metadata in your answer.
+```
+
+The first response should normally report `cache.hit: false`; the second should report `cache.hit: true`, provided caching is enabled and the TTL has not expired.
+
+**Screenshot 12:** First and second cache results
+
+<!-- Add screenshot here: docs/screenshots/12-cache-test.png -->
+
+<br><br><br><br>
+
 ## Updating dependencies and vulnx
 
 Dependabot checks npm packages, GitHub Actions, and Docker base-image digests weekly. The upstream vulnx revision remains a manual review:
