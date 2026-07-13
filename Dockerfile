@@ -1,10 +1,10 @@
-# Stage 1: build the vulnx binary from an immutable upstream revision.
+# Stage 1: build the vulnx binary from the revision in shared build metadata.
 FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS builder
 
-ARG VULNX_REF=2bea077946026d06814ad5c0f82f6e4291dda93f
-
-RUN apk add --no-cache git ca-certificates
-RUN git clone https://github.com/projectdiscovery/vulnx.git /src/vulnx \
+RUN apk add --no-cache git ca-certificates jq
+COPY config/vulnx.json /tmp/vulnx.json
+RUN VULNX_REF="$(jq -er '.revision' /tmp/vulnx.json)" \
+    && git clone https://github.com/projectdiscovery/vulnx.git /src/vulnx \
     && cd /src/vulnx \
     && git checkout --detach "$VULNX_REF"
 
@@ -22,7 +22,8 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev \
     && npm cache clean --force
 
-COPY --chown=node:node server.js ./
+COPY --chown=node:node server.js config.js cache.js operations.js vulnerability.js ./
+COPY --chown=node:node config ./config
 
 # MCP servers communicate over stdio; no network port is exposed.
 USER node

@@ -12,6 +12,7 @@ import {
   handleToolCall,
   internalErrorResult,
   runVulnx,
+  runVulnxVersion,
   summarizeFiltersJson,
   toolResult,
 } from "../server.js";
@@ -47,6 +48,32 @@ test("runVulnx maps a killed timeout to a nonzero result", async () => {
   assert.equal(result.exitCode, 124);
   assert.equal(result.stdout, "partial");
   assert.match(result.stderr, /timed out/);
+});
+
+test("runVulnxVersion uses safe bounded arguments and controlled output", async () => {
+  let invocation;
+  const execFileImpl = (file, args, options, callback) => {
+    invocation = { file, args, options };
+    callback(null, "\u001b[32mv1.0.0\u001b[0m\n", "");
+  };
+
+  const available = await runVulnxVersion({ execFileImpl });
+  assert.deepEqual(available, { available: true, version: "v1.0.0" });
+  assert.equal(invocation.file, "vulnx");
+  assert.deepEqual(invocation.args, [
+    "version",
+    "--disable-update-check",
+    "--silent",
+  ]);
+  assert.equal(invocation.options.timeout, 5_000);
+  assert.equal(invocation.options.maxBuffer, 64 * 1024);
+
+  const unavailable = await runVulnxVersion({
+    execFileImpl: (_file, _args, _options, callback) => {
+      callback(new Error("not installed"), "", "internal path details");
+    },
+  });
+  assert.deepEqual(unavailable, { available: false, version: null });
 });
 
 test("formatOutput handles malformed JSON, empty output, and errors", () => {
@@ -268,6 +295,12 @@ test("MCP initialize, tools/list, and tools/call work end to end", async (t) => 
     "vulnx_search",
     "vulnx_cve",
     "vulnx_filters",
+    "vulnx_batch_cve",
+    "vulnx_prioritize",
+    "vulnx_product_exposure",
+    "vulnx_compare",
+    "vulnx_enrich_findings",
+    "vulnx_status",
   ]);
 
   const called = await client.callTool({
@@ -277,7 +310,20 @@ test("MCP initialize, tools/list, and tools/call work end to end", async (t) => 
   assert.equal(called.isError, false);
   assert.deepEqual(called.structuredContent, {
     data: { argv: ["id", "CVE-2021-44228"] },
+    cache: {
+      enabled: true,
+      hit: false,
+      age_seconds: 0,
+      ttl_seconds: 300,
+    },
   });
+
+  const batch = await client.callTool({
+    name: "vulnx_batch_cve",
+    arguments: { cve_ids: ["CVE-2025-1000", "CVE-2025-2000"] },
+  });
+  assert.equal(batch.isError, false);
+  assert.equal(batch.structuredContent.successful, 2);
 });
 
 test("MCP request handler redacts a runner exception end to end", async (t) => {

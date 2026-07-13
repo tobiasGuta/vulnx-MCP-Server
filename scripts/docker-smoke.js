@@ -24,14 +24,31 @@ try {
   await client.connect(transport);
   const { tools } = await client.listTools();
   const names = tools.map((tool) => tool.name);
-  if (names.length !== 3) throw new Error(`Expected 3 tools, received ${names.length}`);
+  const expectedNames = [
+    "vulnx_search",
+    "vulnx_cve",
+    "vulnx_filters",
+    "vulnx_batch_cve",
+    "vulnx_prioritize",
+    "vulnx_product_exposure",
+    "vulnx_compare",
+    "vulnx_enrich_findings",
+    "vulnx_status",
+  ];
+  if (JSON.stringify(names) !== JSON.stringify(expectedNames)) {
+    throw new Error(`Unexpected tool list: ${names.join(", ")}`);
+  }
+  const status = await client.callTool({ name: "vulnx_status", arguments: {} });
+  if (status.isError || status.structuredContent?.server?.version !== "1.1.0") {
+    throw new Error("vulnx_status did not return the expected server metadata");
+  }
   const filters = await client.callTool({ name: "vulnx_filters", arguments: {} });
   if (filters.isError) {
     const message = filters.content?.[0]?.text || "Unknown vulnx_filters failure";
     throw new Error(message);
   }
   process.stdout.write(
-    `MCP handshake and filter call succeeded. Tools: ${names.join(", ")}\n`,
+    `MCP handshake, status, and filter calls succeeded. Tools: ${names.join(", ")}\n`,
   );
 } finally {
   await client.close();
