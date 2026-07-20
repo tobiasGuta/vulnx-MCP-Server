@@ -12,7 +12,7 @@ WORKDIR /src/vulnx
 RUN go build -trimpath -ldflags="-s -w" -o /usr/local/bin/vulnx ./cmd/vulnx
 
 # Stage 2: run only Node.js, certificates, the server, and the vulnx binary.
-FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293
+FROM node:26-alpine@sha256:e88a35be04478413b7c71c455cd9865de9b9360e1f43456be5951032d7ac1a66
 
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /usr/local/bin/vulnx /usr/local/bin/vulnx
