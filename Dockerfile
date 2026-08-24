@@ -1,5 +1,5 @@
 # Stage 1: build the vulnx binary from the revision in shared build metadata.
-FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS builder
+FROM golang:1.27-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS builder
 
 RUN apk add --no-cache git ca-certificates jq
 COPY config/vulnx.json /tmp/vulnx.json
